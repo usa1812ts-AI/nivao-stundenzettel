@@ -1,0 +1,13 @@
+node_modules/
+.npm-cache/
+dist/
+.DS_Store
+.npmrc
+AGENTS.md
+design-qa.md
+
+# Lokale visuelle QA-Artefakte
+design-comparison.png
+design-comparison-final.png
+implementation-mobile.png
+implementation-viewport.png
