@@ -1,6 +1,6 @@
-# NIVAO Stundenzettel
+# NIVAOX Stundenzettel
 
-Mobile Arbeitszeiterfassung als Progressive Web App für den Außendienst.
+Mobile Arbeitszeiterfassung als Progressive Web App für den Außendienst. Im Corporate Design von NIVAOX AI: Solid AI Solutions.
 
 ## Funktionen
 

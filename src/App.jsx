@@ -26,8 +26,13 @@ import {
   X,
 } from "@phosphor-icons/react";
 
+// Keep the legacy key so installed PWAs retain all existing time entries.
 const STORAGE_KEY = "nivao-stundenzettel";
+const BACKUP_FORMAT = "nivaox-stundenzettel-backup";
+const SUPPORTED_BACKUP_FORMATS = new Set([BACKUP_FORMAT, "nivao-stundenzettel-backup"]);
 const APP_BASE_URL = import.meta.env.BASE_URL;
+const BACKUP_REMINDER_DAYS = 7;
+const BACKUP_OVERDUE_DAYS = 14;
 
 const TYPES = {
   office: {
@@ -82,6 +87,7 @@ function initialState() {
       defaultBreakMinutes: 45,
       holidayRegion: "bavaria",
       trackingStartDate: localDateKey(),
+      lastBackupAt: null,
     },
     days: {},
   };
@@ -203,6 +209,9 @@ function normalizeState(candidate) {
       trackingStartDate: /^\d{4}-\d{2}-\d{2}$/.test(candidate.settings.trackingStartDate)
         ? candidate.settings.trackingStartDate
         : localDateKey(),
+      lastBackupAt: Number.isFinite(candidate.settings.lastBackupAt)
+        ? candidate.settings.lastBackupAt
+        : null,
     },
     days,
   };
@@ -306,6 +315,45 @@ function monthLabel(monthKey) {
   return new Intl.DateTimeFormat("de-DE", { month: "long", year: "numeric" }).format(new Date(year, month - 1, 1));
 }
 
+function backupStatus(lastBackupAt, now = Date.now()) {
+  if (!Number.isFinite(lastBackupAt)) {
+    return {
+      level: "warning",
+      needsBackup: true,
+      title: "Noch kein Backup erstellt",
+      detail: "Sichere deine Daten jetzt und danach mindestens alle 7 Tage.",
+    };
+  }
+  const ageDays = Math.max(0, Math.floor((now - lastBackupAt) / 86400000));
+  const date = new Intl.DateTimeFormat("de-DE", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(lastBackupAt);
+  if (ageDays >= BACKUP_OVERDUE_DAYS) {
+    return {
+      level: "overdue",
+      needsBackup: true,
+      title: `Backup seit ${ageDays} Tagen überfällig`,
+      detail: `Letzte Sicherung: ${date}. Erstelle möglichst heute ein neues Backup.`,
+    };
+  }
+  if (ageDays >= BACKUP_REMINDER_DAYS) {
+    return {
+      level: "warning",
+      needsBackup: true,
+      title: "Neues Backup empfohlen",
+      detail: `Letzte Sicherung: ${date}, vor ${ageDays} Tagen.`,
+    };
+  }
+  return {
+    level: "current",
+    needsBackup: false,
+    title: "Backup ist aktuell",
+    detail: ageDays === 0 ? `Letzte Sicherung: heute, ${date}.` : `Letzte Sicherung: ${date}, vor ${ageDays} Tagen.`,
+  };
+}
+
 function findDayWarnings(day, dateKey, now) {
   if (!day?.entries?.length) return [];
   const warnings = [];
@@ -355,7 +403,7 @@ function dayTotals(day, now, settings, dateKey = localDateKey()) {
 function BrandHeader({ onSettings }) {
   return (
     <header className="brand-header">
-      <img src={`${APP_BASE_URL}assets/nivao-lockup.png`} alt="NIVAO AI" />
+      <img src={`${APP_BASE_URL}assets/nivaox-lockup.png`} alt="NIVAOX AI" />
       <button className="icon-button" onClick={onSettings} aria-label="Einstellungen öffnen">
         <Gear size={25} weight="regular" />
       </button>
@@ -723,8 +771,9 @@ function OverviewView({
   );
 }
 
-function ExportView({ state, now, onImportPreview }) {
+function ExportView({ state, now, onImportPreview, onBackupCreated }) {
   const importInput = useRef(null);
+  const backup = backupStatus(state.settings.lastBackupAt, now);
   const years = new Set([new Date().getFullYear(), ...Object.keys(state.days).map((key) => Number(key.slice(0, 4)))]);
   const calendarDays = [...years].sort().flatMap((year) =>
     keysBetween(dateKeyFromParts(year, 1, 1), dateKeyFromParts(year, 12, 31)),
@@ -762,7 +811,7 @@ function ExportView({ state, now, onImportPreview }) {
       headers.map(escapeCsv).join(";"),
       ...rows.map((row) => headers.map((header) => escapeCsv(row[header])).join(";")),
     ].join("\r\n");
-    downloadFile(`\uFEFF${content}`, `nivao-stundenzettel-${localDateKey()}.csv`, "text/csv;charset=utf-8");
+    downloadFile(`\uFEFF${content}`, `nivaox-stundenzettel-${localDateKey()}.csv`, "text/csv;charset=utf-8");
   };
 
   const downloadXls = () => {
@@ -774,21 +823,30 @@ function ExportView({ state, now, onImportPreview }) {
         <tbody>${rows.map((row) => `<tr>${headers.map((header) => `<td>${row[header]}</td>`).join("")}</tr>`).join("")}</tbody>
       </table>`;
     const html = `<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="UTF-8"></head><body>${table}</body></html>`;
-    downloadFile(html, `nivao-stundenzettel-${localDateKey()}.xls`, "application/vnd.ms-excel");
+    downloadFile(html, `nivaox-stundenzettel-${localDateKey()}.xls`, "application/vnd.ms-excel");
   };
 
   const downloadBackup = () => {
+    const exportedAt = Date.now();
+    const backupState = {
+      ...state,
+      settings: {
+        ...state.settings,
+        lastBackupAt: exportedAt,
+      },
+    };
     const payload = {
-      format: "nivao-stundenzettel-backup",
+      format: BACKUP_FORMAT,
       version: 1,
-      exportedAt: new Date().toISOString(),
-      data: state,
+      exportedAt: new Date(exportedAt).toISOString(),
+      data: backupState,
     };
     downloadFile(
       JSON.stringify(payload, null, 2),
-      `nivao-stundenzettel-backup-${localDateKey()}.json`,
+      `nivaox-stundenzettel-backup-${localDateKey()}.json`,
       "application/json;charset=utf-8",
     );
+    onBackupCreated(exportedAt);
   };
 
   const readImport = async (event) => {
@@ -797,7 +855,7 @@ function ExportView({ state, now, onImportPreview }) {
     if (!file) return;
     try {
       const parsed = JSON.parse(await file.text());
-      const candidate = parsed?.format === "nivao-stundenzettel-backup" ? parsed.data : parsed;
+      const candidate = SUPPORTED_BACKUP_FORMATS.has(parsed?.format) ? parsed.data : parsed;
       const normalized = normalizeState(candidate);
       onImportPreview({
         state: normalized,
@@ -828,6 +886,10 @@ function ExportView({ state, now, onImportPreview }) {
         <DownloadSimple size={22} />
       </button>
       <div className="section-label export-section-label">DATENSICHERUNG</div>
+      <div className={`backup-status is-${backup.level}`} role="status">
+        {backup.level === "current" ? <Check size={22} weight="bold" /> : <Warning size={22} weight="fill" />}
+        <div><strong>{backup.title}</strong><span>{backup.detail}</span></div>
+      </div>
       <button className="export-card" onClick={downloadBackup}>
         <DownloadSimple size={37} />
         <div><strong>Backup herunterladen</strong><span>Alle Einstellungen, Zeiten und Urlaubstage als JSON sichern</span></div>
@@ -841,7 +903,10 @@ function ExportView({ state, now, onImportPreview }) {
       <input ref={importInput} className="visually-hidden" type="file" accept="application/json,.json" onChange={readImport} />
       <div className="privacy-note">
         <Check size={20} weight="bold" />
-        <div><strong>Deine Daten bleiben lokal.</strong><span>Die App überträgt keine Zeiten an einen Server.</span></div>
+        <div>
+          <strong>Deine Daten bleiben lokal.</strong>
+          <span>Die App überträgt keine Zeiten an einen Server. Bei Gerätewechsel, Löschen der Browserdaten oder Entfernen der PWA kann ohne JSON-Backup alles verloren gehen.</span>
+        </div>
       </div>
     </section>
   );
@@ -1051,6 +1116,7 @@ export function App() {
     .find((session) => session.entry);
   const displayedDayKey = activeSession?.dayKey ?? todayKey;
   const displayedDay = state.days[displayedDayKey];
+  const backup = backupStatus(state.settings.lastBackupAt, now);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -1262,13 +1328,29 @@ export function App() {
             onAddEntry={() => setAddEntryOpen(true)}
           />
         )}
-        {view === "export" && <ExportView state={state} now={now} onImportPreview={setImportPreview} />}
+        {view === "export" && (
+          <ExportView
+            state={state}
+            now={now}
+            onImportPreview={setImportPreview}
+            onBackupCreated={(timestamp) => {
+              setState((current) => ({
+                ...current,
+                settings: {
+                  ...current.settings,
+                  lastBackupAt: timestamp,
+                },
+              }));
+            }}
+          />
+        )}
       </main>
       <nav className="bottom-nav">
         {navigation.map(({ key, label, icon: Icon }) => (
           <button key={key} className={view === key ? "active" : ""} onClick={() => setView(key)}>
             <Icon size={25} weight={view === key ? "fill" : "regular"} />
             <span>{label}</span>
+            {key === "export" && backup.needsBackup && <i className="nav-alert" aria-label="Backup fällig" />}
           </button>
         ))}
       </nav>
@@ -1278,7 +1360,13 @@ export function App() {
           settings={state.settings}
           onClose={() => setSettingsOpen(false)}
           onSave={(settings) => {
-            setState((current) => ({ ...current, settings }));
+            setState((current) => ({
+              ...current,
+              settings: {
+                ...current.settings,
+                ...settings,
+              },
+            }));
             setSettingsOpen(false);
           }}
         />

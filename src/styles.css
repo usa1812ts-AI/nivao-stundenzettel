@@ -759,6 +759,50 @@ p {
   margin-top: 30px;
 }
 
+.backup-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 15px;
+  margin-bottom: 14px;
+  border-radius: 9px;
+  border: 1px solid #ead5b5;
+  background: #fff8ef;
+  color: #7c470d;
+}
+
+.backup-status.is-current {
+  border-color: #cfe0d2;
+  background: #f2f8f3;
+  color: #2f653a;
+}
+
+.backup-status.is-overdue {
+  border-color: #e5b7ac;
+  background: #fff2ef;
+  color: #8a3426;
+}
+
+.backup-status > svg {
+  flex: 0 0 auto;
+  color: var(--orange);
+}
+
+.backup-status.is-current > svg {
+  color: #367142;
+}
+
+.backup-status div {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.backup-status span {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .visually-hidden {
   position: absolute !important;
   width: 1px !important;
@@ -860,6 +904,17 @@ p {
   width: 40px;
   height: 3px;
   border-radius: 0 0 3px 3px;
+  background: var(--orange);
+}
+
+.nav-alert {
+  position: absolute;
+  top: 13px;
+  left: calc(50% + 10px);
+  width: 8px;
+  height: 8px;
+  border: 2px solid white;
+  border-radius: 50%;
   background: var(--orange);
 }
 
