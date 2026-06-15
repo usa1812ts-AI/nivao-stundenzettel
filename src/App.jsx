@@ -120,6 +120,42 @@ function totalMs(entries, predicate, now) {
     .reduce((sum, entry) => sum + durationMs(entry, now), 0);
 }
 
+function mergeAdjacentEntries(entries) {
+  return [...entries]
+    .sort((a, b) => a.start - b.start)
+    .reduce((merged, entry) => {
+      const previous = merged.at(-1);
+      if (previous && previous.type === entry.type && previous.end === entry.start) {
+        previous.end = entry.end;
+        return merged;
+      }
+      merged.push({ ...entry });
+      return merged;
+    }, []);
+}
+
+function insertEntryIntoTimeline(entries, inserted) {
+  const adjusted = entries.flatMap((entry) => {
+    const entryEnd = entry.end ?? Number.POSITIVE_INFINITY;
+    if (entryEnd <= inserted.start || entry.start >= inserted.end) return [entry];
+
+    const remaining = [];
+    if (entry.start < inserted.start) {
+      remaining.push({ ...entry, end: inserted.start });
+    }
+    if (entryEnd > inserted.end) {
+      remaining.push({
+        ...entry,
+        id: uid(),
+        start: inserted.end,
+        end: entry.end,
+      });
+    }
+    return remaining;
+  });
+  return mergeAdjacentEntries([...adjusted, inserted]);
+}
+
 function formatDuration(ms, withSeconds = false) {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const hours = Math.floor(totalSeconds / 3600);
@@ -378,10 +414,17 @@ function findDayWarnings(day, dateKey, now) {
 
 function dayTotals(day, now, settings, dateKey = localDateKey()) {
   const entries = day?.entries ?? [];
-  const work = totalMs(entries, (entry) => TYPES[entry.type]?.work, now);
+  const recordedWork = totalMs(entries, (entry) => TYPES[entry.type]?.work, now);
   const activeDrive = totalMs(entries, (entry) => entry.type === "driveActive", now);
   const passiveDrive = totalMs(entries, (entry) => entry.type === "drivePassive", now);
-  const breakTime = totalMs(entries, (entry) => entry.type === "break", now);
+  const manualBreakTime = totalMs(entries, (entry) => entry.type === "break", now);
+  const automaticBreakTime = day?.closedAt &&
+    manualBreakTime === 0 &&
+    recordedWork > 6 * 3600000
+    ? Math.min(recordedWork, settings.defaultBreakMinutes * 60000)
+    : 0;
+  const breakTime = manualBreakTime + automaticBreakTime;
+  const work = Math.max(0, recordedWork - automaticBreakTime);
   const calendar = calendarInfo(dateKey, settings);
   const tracked = dateKey >= settings.trackingStartDate;
   const target = calendar.workingDay && tracked ? settings.dailyTargetMinutes * 60000 : 0;
@@ -394,6 +437,8 @@ function dayTotals(day, now, settings, dateKey = localDateKey()) {
     activeDrive,
     passiveDrive,
     breakTime,
+    manualBreakTime,
+    automaticBreakTime,
     target,
     balance: credited - target,
     calendar,
@@ -500,7 +545,12 @@ function TodayView({
           </div>
           <Metric icon={Clock} label="Arbeitszeit heute" note="Büro, Kundentermin, Fahrt aktiv" value={formatDuration(totals.work)} />
           <Metric icon={Car} label="Passive Fahrzeit" note="zählt nicht als Arbeitszeit" value={formatDuration(totals.passiveDrive)} />
-          <Metric icon={Coffee} label="Pause" note={`Standard ${settings.defaultBreakMinutes} Min.`} value={formatDuration(totals.breakTime)} />
+          <Metric
+            icon={Coffee}
+            label="Pause"
+            note={totals.automaticBreakTime ? "Automatisch abgezogen, ohne Uhrzeit" : `Standard ${settings.defaultBreakMinutes} Min.`}
+            value={formatDuration(totals.breakTime)}
+          />
           <Metric
             icon={ArrowClockwise}
             label="Tagessaldo"
@@ -508,9 +558,9 @@ function TodayView({
             value={`${totals.balance >= 0 ? "+" : "−"}${formatDuration(Math.abs(totals.balance))}`}
             accent
           />
-          {totals.breakTime < settings.defaultBreakMinutes * 60000 && (
+          {totals.manualBreakTime > 0 && totals.manualBreakTime < settings.defaultBreakMinutes * 60000 && (
             <div className="break-warning">
-              Erfasste Pause unter dem Standard von {settings.defaultBreakMinutes} Minuten. Bei Bedarf über die Zeile unten korrigieren.
+              Konkrete Pause unter dem Standard von {settings.defaultBreakMinutes} Minuten. Sie ersetzt den automatischen Abzug vollständig.
             </div>
           )}
           <div className="entry-list">
@@ -522,6 +572,14 @@ function TodayView({
                 <PencilSimple size={17} />
               </button>
             ))}
+            {totals.automaticBreakTime > 0 && (
+              <div className="entry-row automatic-break-row">
+                <span>ohne Uhrzeit</span>
+                <strong>Pause automatisch</strong>
+                <span>{formatDuration(totals.automaticBreakTime)}</span>
+                <Coffee size={17} />
+              </div>
+            )}
           </div>
         </div>
         <button className="secondary-action reopen-day" onClick={onReopenDay}>
@@ -583,7 +641,12 @@ function TodayView({
         </div>
         <Metric icon={Clock} label="Arbeitszeit heute" note="Erfasste Arbeitsphasen" value={formatDuration(totals.work)} />
         <Metric icon={ChartBar} label="Sollzeit" note="Tagesziel" value={formatDuration(totals.target)} />
-        <Metric icon={Coffee} label="Pause" note={`Standard ${settings.defaultBreakMinutes} Min.`} value={formatDuration(totals.breakTime)} />
+        <Metric
+          icon={Coffee}
+          label="Pause"
+          note={totals.automaticBreakTime ? "Wird beim Tagesabschluss abgezogen" : `Standard ${settings.defaultBreakMinutes} Min.`}
+          value={formatDuration(totals.breakTime)}
+        />
         <Metric
           icon={ArrowClockwise}
           label="Saldo"
@@ -686,7 +749,7 @@ function OverviewView({
           </button>
           <button className="vacation-action overview-vacation" onClick={onAddEntry}>
             <Plus size={20} />
-            Phase nachtragen
+            Zeitraum korrigieren
           </button>
         </div>
       </div>
@@ -754,6 +817,14 @@ function OverviewView({
                     <PencilSimple size={16} />
                   </button>
                 ))}
+                {totals.automaticBreakTime > 0 && (
+                  <div className="automatic-break-day-row">
+                    <span>ohne Uhrzeit</span>
+                    <strong>Pause automatisch</strong>
+                    <span>{formatDuration(totals.automaticBreakTime)}</span>
+                    <Coffee size={16} />
+                  </div>
+                )}
               </div>}
               {hasVacation && (
                 <div className="day-entries vacation-controls">
@@ -784,7 +855,10 @@ function ExportView({ state, now, onImportPreview, onBackupCreated }) {
     const totals = dayTotals(day, now, state.settings, date);
     const phases = (day?.entries ?? []).map((entry) =>
       `${formatClock(entry.start)}-${entry.end ? formatClock(entry.end) : "läuft"} ${TYPES[entry.type].label}`,
-    ).join(" | ");
+    );
+    if (totals.automaticBreakTime > 0) {
+      phases.push(`ohne Uhrzeit Automatische Pause ${formatDuration(totals.automaticBreakTime)}`);
+    }
     const dayType = day?.status === "vacation" && !day?.entries?.length
       ? "Urlaub"
       : totals.calendar.holiday ?? (totals.calendar.weekend ? "Wochenende" : "Werktag");
@@ -799,7 +873,8 @@ function ExportView({ state, now, onImportPreview, onBackupCreated }) {
       "Aktive Fahrt (Std.)": (totals.activeDrive / 3600000).toFixed(2).replace(".", ","),
       "Passive Fahrt (Std.)": (totals.passiveDrive / 3600000).toFixed(2).replace(".", ","),
       "Pause (Std.)": (totals.breakTime / 3600000).toFixed(2).replace(".", ","),
-      Phasen: phases,
+      "Automatische Pause (Std.)": (totals.automaticBreakTime / 3600000).toFixed(2).replace(".", ","),
+      Phasen: phases.join(" | "),
       Status: day?.closedAt ? "Abgeschlossen" : day?.entries?.length ? "In Bearbeitung" : "",
     };
   });
@@ -981,7 +1056,7 @@ function SettingsModal({ settings, onSave, onClose }) {
           <option value="augsburg">Stadt Augsburg</option>
         </select></label>
         <label>Zeiterfassung ab<input type="date" value={trackingStartDate} onChange={(event) => setTrackingStartDate(event.target.value)} required /></label>
-        <p className="form-note">Die Standardpause wird nicht heimlich abgezogen. Du kannst fehlende Minuten bewusst ergänzen.</p>
+        <p className="form-note">Beim Tagesabschluss wird die Standardpause automatisch abgezogen, wenn mehr als sechs Stunden Arbeitszeit und keine konkrete Pause erfasst wurden.</p>
         <button className="primary-action compact" type="submit"><Check size={20} />Einstellungen speichern</button>
       </form>
     </Modal>
@@ -1008,10 +1083,10 @@ function VacationModal({ onSave, onClose }) {
   );
 }
 
-function AddEntryModal({ onSave, onClose }) {
+function AddEntryModal({ onPrepare, onClose }) {
   const today = localDateKey();
   return (
-    <Modal title="Phase nachtragen" onClose={onClose}>
+    <Modal title="Zeitraum korrigieren" onClose={onClose}>
       <form className="modal-form" onSubmit={(event) => {
         event.preventDefault();
         const form = event.currentTarget.elements;
@@ -1019,7 +1094,7 @@ function AddEntryModal({ onSave, onClose }) {
         const start = new Date(`${date}T${form.entryStart.value}`).getTime();
         const end = new Date(`${date}T${form.entryEnd.value}`).getTime();
         if (!date || !start || !end || end <= start) return;
-        onSave(date, {
+        onPrepare(date, {
           id: uid(),
           type: form.entryType.value,
           start,
@@ -1034,9 +1109,31 @@ function AddEntryModal({ onSave, onClose }) {
           <label>Beginn<input name="entryStart" type="time" defaultValue="08:00" required /></label>
           <label>Ende<input name="entryEnd" type="time" defaultValue="09:00" required /></label>
         </div>
-        <p className="form-note">Vorhandene Phasen bleiben erhalten. Überschneidungen solltest du anschließend in der Tagesansicht prüfen.</p>
-        <button className="primary-action compact" type="submit"><Plus size={20} />Phase speichern</button>
+        <p className="form-note">Der Zeitraum ersetzt den betroffenen Abschnitt. Angrenzende Phasen werden automatisch gekürzt oder geteilt.</p>
+        <button className="primary-action compact" type="submit"><Plus size={20} />Aufteilung prüfen</button>
       </form>
+    </Modal>
+  );
+}
+
+function TimelinePreviewModal({ preview, onConfirm, onClose }) {
+  return (
+    <Modal title="Neue Aufteilung übernehmen?" onClose={onClose}>
+      <p className="form-note">
+        {TYPES[preview.inserted.type].label} wird am {formatDate(preview.dateKey)} von {formatClock(preview.inserted.start)} bis {formatClock(preview.inserted.end)} Uhr eingesetzt.
+      </p>
+      <div className="timeline-preview">
+        {preview.entries.map((entry) => (
+          <div key={entry.id} className={entry.id === preview.inserted.id ? "is-inserted" : ""}>
+            <span>{formatClock(entry.start)}–{entry.end ? formatClock(entry.end) : "läuft"}</span>
+            <strong>{TYPES[entry.type].label}</strong>
+          </div>
+        ))}
+      </div>
+      <div className="confirmation-actions">
+        <button className="secondary-action compact-button" onClick={onClose}>Abbrechen</button>
+        <button className="primary-action compact compact-button" onClick={onConfirm}><Check size={19} />Übernehmen</button>
+      </div>
     </Modal>
   );
 }
@@ -1103,6 +1200,7 @@ export function App() {
   const [editing, setEditing] = useState(null);
   const [vacationOpen, setVacationOpen] = useState(false);
   const [addEntryOpen, setAddEntryOpen] = useState(false);
+  const [timelinePreview, setTimelinePreview] = useState(null);
   const [deletePending, setDeletePending] = useState(null);
   const [importPreview, setImportPreview] = useState(null);
   const [selectedMonth, setSelectedMonth] = useState(localDateKey().slice(0, 7));
@@ -1273,7 +1371,19 @@ export function App() {
     }));
   };
 
-  const addEntry = (dateKey, entry) => {
+  const prepareTimelineCorrection = (dateKey, entry) => {
+    const day = state.days[dateKey] ?? { entries: [], closedAt: null };
+    setTimelinePreview({
+      dateKey,
+      inserted: entry,
+      entries: insertEntryIntoTimeline(day.entries, entry),
+    });
+    setAddEntryOpen(false);
+  };
+
+  const applyTimelineCorrection = () => {
+    if (!timelinePreview) return;
+    const { dateKey, entries } = timelinePreview;
     setState((current) => {
       const day = current.days[dateKey] ?? { entries: [], closedAt: null };
       return {
@@ -1283,12 +1393,12 @@ export function App() {
           [dateKey]: {
             ...day,
             status: undefined,
-            entries: [...day.entries, entry].sort((a, b) => a.start - b.start),
+            entries,
           },
         },
       };
     });
-    setAddEntryOpen(false);
+    setTimelinePreview(null);
   };
 
   const navigation = useMemo(() => [
@@ -1383,7 +1493,14 @@ export function App() {
         />
       )}
       {vacationOpen && <VacationModal onSave={saveVacation} onClose={() => setVacationOpen(false)} />}
-      {addEntryOpen && <AddEntryModal onSave={addEntry} onClose={() => setAddEntryOpen(false)} />}
+      {addEntryOpen && <AddEntryModal onPrepare={prepareTimelineCorrection} onClose={() => setAddEntryOpen(false)} />}
+      {timelinePreview && (
+        <TimelinePreviewModal
+          preview={timelinePreview}
+          onConfirm={applyTimelineCorrection}
+          onClose={() => setTimelinePreview(null)}
+        />
+      )}
       {deletePending && <DeleteEntryModal entry={deletePending.entry} onConfirm={deleteEntry} onClose={() => setDeletePending(null)} />}
       {importPreview && (
         <ImportPreviewModal
