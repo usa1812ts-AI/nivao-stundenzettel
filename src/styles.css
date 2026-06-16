@@ -868,6 +868,22 @@ p {
   line-height: 1.4;
 }
 
+.warning-link {
+  border: 0;
+  background: transparent;
+  color: #7c470d;
+  padding: 0;
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.4;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.warning-link:hover {
+  color: var(--orange);
+}
+
 .privacy-note {
   margin-top: 28px;
   padding: 17px;

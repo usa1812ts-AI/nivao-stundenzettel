@@ -445,6 +445,13 @@ function dayTotals(day, now, settings, dateKey = localDateKey()) {
   };
 }
 
+function latestEntryEnd(day, fallback = Date.now()) {
+  return (day?.entries ?? []).reduce((latest, entry) => {
+    if (!Number.isFinite(entry.end)) return latest;
+    return Math.max(latest, entry.end);
+  }, 0) || fallback;
+}
+
 function BrandHeader({ onSettings }) {
   return (
     <header className="brand-header">
@@ -691,6 +698,7 @@ function OverviewView({
   onVacation,
   onRemoveVacation,
   onAddEntry,
+  onCloseDay,
 }) {
   const monthKey = selectedMonth;
   const calendarDays = monthDateKeys(monthKey);
@@ -773,7 +781,18 @@ function OverviewView({
           <div>
             <strong>{warningDays.length} Tag{warningDays.length === 1 ? "" : "e"} prüfen</strong>
             {warningDays.map(({ key, warnings }) => (
-              <span key={key}>{formatDate(key)}: {warnings.join(", ")}</span>
+              <button
+                className="warning-link"
+                key={key}
+                type="button"
+                onClick={() => {
+                  const target = document.getElementById(`day-${key}`);
+                  if (target instanceof HTMLDetailsElement) target.open = true;
+                  target?.scrollIntoView({ behavior: "smooth", block: "center" });
+                }}
+              >
+                {formatDate(key)}: {warnings.join(", ")}
+              </button>
             ))}
           </div>
         </div>
@@ -788,8 +807,12 @@ function OverviewView({
             : totals.calendar.holiday ?? (totals.calendar.weekend ? "Wochenende" : null);
           const isFuture = key > todayKey;
           const dayWarnings = findDayWarnings(day, key, now);
+          const canClosePastDay = key < todayKey &&
+            Boolean(day?.entries?.length) &&
+            !day.closedAt &&
+            !day.entries.some((entry) => !entry.end);
           return (
-            <details className={`day-card ${specialLabel ? "is-special" : ""} ${dayWarnings.length ? "has-warning" : ""}`} key={key}>
+            <details className={`day-card ${specialLabel ? "is-special" : ""} ${dayWarnings.length ? "has-warning" : ""}`} key={key} id={`day-${key}`}>
               <summary>
                 <div>
                   <strong>{formatDate(key, true)}</strong>
@@ -826,6 +849,12 @@ function OverviewView({
                   </div>
                 )}
               </div>}
+              {canClosePastDay && (
+                <button className="text-action" onClick={() => onCloseDay(key)}>
+                  <Check size={18} weight="bold" />
+                  Tag mit letzter erfasster Zeit abschließen
+                </button>
+              )}
               {hasVacation && (
                 <div className="day-entries vacation-controls">
                   <button onClick={() => onRemoveVacation(key)}>
@@ -1065,6 +1094,12 @@ function SettingsModal({ settings, onSave, onClose }) {
 
 function VacationModal({ onSave, onClose }) {
   const today = localDateKey();
+  const [startDate, setStartDate] = useState(today);
+  const [endDate, setEndDate] = useState(today);
+  const updateStartDate = (nextStart) => {
+    setStartDate(nextStart);
+    if (endDate < nextStart) setEndDate(nextStart);
+  };
   return (
     <Modal title="Urlaub eintragen" onClose={onClose}>
       <form className="modal-form" onSubmit={(event) => {
@@ -1074,8 +1109,8 @@ function VacationModal({ onSave, onClose }) {
         if (end < start) return;
         onSave(start, end);
       }}>
-        <label>Erster Urlaubstag<input name="vacationStart" type="date" defaultValue={today} required /></label>
-        <label>Letzter Urlaubstag<input name="vacationEnd" type="date" defaultValue={today} required /></label>
+        <label>Erster Urlaubstag<input name="vacationStart" type="date" value={startDate} onInput={(event) => updateStartDate(event.currentTarget.value)} onChange={(event) => updateStartDate(event.currentTarget.value)} required /></label>
+        <label>Letzter Urlaubstag<input name="vacationEnd" type="date" value={endDate} min={startDate} onChange={(event) => setEndDate(event.target.value)} required /></label>
         <p className="form-note">Wochenenden und bayerische Feiertage werden nicht als Urlaubstag gerechnet.</p>
         <button className="primary-action compact" type="submit"><CalendarCheck size={20} />Urlaub speichern</button>
       </form>
@@ -1371,6 +1406,13 @@ export function App() {
     }));
   };
 
+  const closeDay = (dateKey) => {
+    updateDay(dateKey, (day) => ({
+      ...day,
+      closedAt: latestEntryEnd(day),
+    }));
+  };
+
   const prepareTimelineCorrection = (dateKey, entry) => {
     const day = state.days[dateKey] ?? { entries: [], closedAt: null };
     setTimelinePreview({
@@ -1436,6 +1478,7 @@ export function App() {
             onVacation={() => setVacationOpen(true)}
             onRemoveVacation={removeVacation}
             onAddEntry={() => setAddEntryOpen(true)}
+            onCloseDay={closeDay}
           />
         )}
         {view === "export" && (
