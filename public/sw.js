@@ -1,4 +1,4 @@
-const CACHE_NAME = "nivaox-stundenzettel-v6";
+const CACHE_NAME = "nivaox-stundenzettel-v7";
 const BASE_URL = new URL(self.registration.scope);
 const appUrl = (path = "") => new URL(path, BASE_URL).href;
 const APP_SHELL = [

@@ -734,6 +734,12 @@ p {
   color: #7c470d;
 }
 
+.day-add-entry {
+  width: calc(100% - 16px);
+  margin: 0 8px 14px;
+  justify-content: center;
+}
+
 .empty-state {
   padding: 40px 0;
   text-align: center;

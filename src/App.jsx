@@ -172,6 +172,12 @@ function formatClock(timestamp) {
   }).format(timestamp);
 }
 
+function timeInputValue(timestamp) {
+  if (!Number.isFinite(timestamp)) return "08:00";
+  const date = new Date(timestamp);
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
 function formatDate(dateKey, includeWeekday = false) {
   const [year, month, day] = dateKey.split("-").map(Number);
   return new Intl.DateTimeFormat("de-DE", {
@@ -755,7 +761,7 @@ function OverviewView({
             <CalendarCheck size={20} />
             Urlaub
           </button>
-          <button className="vacation-action overview-vacation" onClick={onAddEntry}>
+          <button className="vacation-action overview-vacation" onClick={() => onAddEntry({})}>
             <Plus size={20} />
             Zeitraum korrigieren
           </button>
@@ -811,6 +817,9 @@ function OverviewView({
             Boolean(day?.entries?.length) &&
             !day.closedAt &&
             !day.entries.some((entry) => !entry.end);
+          const suggestedCorrectionTime = day?.entries?.length
+            ? timeInputValue(latestEntryEnd(day, new Date(`${key}T08:00`).getTime()))
+            : "08:00";
           return (
             <details className={`day-card ${specialLabel ? "is-special" : ""} ${dayWarnings.length ? "has-warning" : ""}`} key={key} id={`day-${key}`}>
               <summary>
@@ -849,6 +858,14 @@ function OverviewView({
                   </div>
                 )}
               </div>}
+              <button className="text-action day-add-entry" onClick={() => onAddEntry({
+                date: key,
+                startTime: suggestedCorrectionTime,
+                endTime: suggestedCorrectionTime,
+              })}>
+                <Plus size={18} weight="bold" />
+                Zeitraum an diesem Tag ergänzen
+              </button>
               {canClosePastDay && (
                 <button className="text-action" onClick={() => onCloseDay(key)}>
                   <Check size={18} weight="bold" />
@@ -1118,8 +1135,16 @@ function VacationModal({ onSave, onClose }) {
   );
 }
 
-function AddEntryModal({ onPrepare, onClose }) {
+function AddEntryModal({ defaults, onPrepare, onClose }) {
   const today = localDateKey();
+  const [entryDate, setEntryDate] = useState(defaults?.date ?? today);
+  const [entryStart, setEntryStart] = useState(defaults?.startTime ?? "08:00");
+  const [entryEnd, setEntryEnd] = useState(defaults?.endTime ?? defaults?.startTime ?? "08:00");
+  const [endTouched, setEndTouched] = useState(false);
+  const updateStart = (value) => {
+    setEntryStart(value);
+    if (!endTouched) setEntryEnd(value);
+  };
   return (
     <Modal title="Zeitraum korrigieren" onClose={onClose}>
       <form className="modal-form" onSubmit={(event) => {
@@ -1136,13 +1161,19 @@ function AddEntryModal({ onPrepare, onClose }) {
           end,
         });
       }}>
-        <label>Datum<input name="entryDate" type="date" defaultValue={today} required /></label>
+        <label>Datum<input name="entryDate" type="date" value={entryDate} onInput={(event) => setEntryDate(event.currentTarget.value)} onChange={(event) => setEntryDate(event.currentTarget.value)} required /></label>
         <label>Tätigkeit<select name="entryType" defaultValue="office">
           {Object.entries(TYPES).map(([key, item]) => <option key={key} value={key}>{item.label}</option>)}
         </select></label>
         <div className="form-grid">
-          <label>Beginn<input name="entryStart" type="time" defaultValue="08:00" required /></label>
-          <label>Ende<input name="entryEnd" type="time" defaultValue="09:00" required /></label>
+          <label>Beginn<input name="entryStart" type="time" value={entryStart} onInput={(event) => updateStart(event.currentTarget.value)} onChange={(event) => updateStart(event.currentTarget.value)} required /></label>
+          <label>Ende<input name="entryEnd" type="time" value={entryEnd} onInput={(event) => {
+            setEndTouched(true);
+            setEntryEnd(event.currentTarget.value);
+          }} onChange={(event) => {
+            setEndTouched(true);
+            setEntryEnd(event.currentTarget.value);
+          }} required /></label>
         </div>
         <p className="form-note">Der Zeitraum ersetzt den betroffenen Abschnitt. Angrenzende Phasen werden automatisch gekürzt oder geteilt.</p>
         <button className="primary-action compact" type="submit"><Plus size={20} />Aufteilung prüfen</button>
@@ -1234,7 +1265,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [vacationOpen, setVacationOpen] = useState(false);
-  const [addEntryOpen, setAddEntryOpen] = useState(false);
+  const [addEntryDefaults, setAddEntryDefaults] = useState(null);
   const [timelinePreview, setTimelinePreview] = useState(null);
   const [deletePending, setDeletePending] = useState(null);
   const [importPreview, setImportPreview] = useState(null);
@@ -1413,6 +1444,14 @@ export function App() {
     }));
   };
 
+  const openAddEntry = (defaults = {}) => {
+    setAddEntryDefaults(defaults);
+  };
+
+  const closeAddEntry = () => {
+    setAddEntryDefaults(null);
+  };
+
   const prepareTimelineCorrection = (dateKey, entry) => {
     const day = state.days[dateKey] ?? { entries: [], closedAt: null };
     setTimelinePreview({
@@ -1420,7 +1459,7 @@ export function App() {
       inserted: entry,
       entries: insertEntryIntoTimeline(day.entries, entry),
     });
-    setAddEntryOpen(false);
+    closeAddEntry();
   };
 
   const applyTimelineCorrection = () => {
@@ -1428,14 +1467,21 @@ export function App() {
     const { dateKey, entries } = timelinePreview;
     setState((current) => {
       const day = current.days[dateKey] ?? { entries: [], closedAt: null };
+      const correctedDay = {
+        ...day,
+        status: undefined,
+        entries,
+      };
+      const closedAt = day.closedAt
+        ? Math.max(day.closedAt, latestEntryEnd(correctedDay, day.closedAt))
+        : day.closedAt;
       return {
         ...current,
         days: {
           ...current.days,
           [dateKey]: {
-            ...day,
-            status: undefined,
-            entries,
+            ...correctedDay,
+            closedAt,
           },
         },
       };
@@ -1477,7 +1523,7 @@ export function App() {
             onEditEntry={openEdit}
             onVacation={() => setVacationOpen(true)}
             onRemoveVacation={removeVacation}
-            onAddEntry={() => setAddEntryOpen(true)}
+            onAddEntry={openAddEntry}
             onCloseDay={closeDay}
           />
         )}
@@ -1536,7 +1582,7 @@ export function App() {
         />
       )}
       {vacationOpen && <VacationModal onSave={saveVacation} onClose={() => setVacationOpen(false)} />}
-      {addEntryOpen && <AddEntryModal onPrepare={prepareTimelineCorrection} onClose={() => setAddEntryOpen(false)} />}
+      {addEntryDefaults !== null && <AddEntryModal defaults={addEntryDefaults} onPrepare={prepareTimelineCorrection} onClose={closeAddEntry} />}
       {timelinePreview && (
         <TimelinePreviewModal
           preview={timelinePreview}
