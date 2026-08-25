@@ -1,14 +1,14 @@
-const CACHE_NAME = "nivaox-stundenzettel-v7";
+const CACHE_NAME = "nivaox-stundenzettel-v8";
 const BASE_URL = new URL(self.registration.scope);
 const appUrl = (path = "") => new URL(path, BASE_URL).href;
 const APP_SHELL = [
   appUrl(),
   appUrl("manifest.webmanifest"),
   appUrl("assets/nivaox-lockup.png"),
-  appUrl("assets/nivaox-icon-192.png"),
-  appUrl("assets/nivaox-icon-512.png"),
-  appUrl("assets/nivaox-apple-touch-icon.png"),
-  appUrl("assets/nivaox-favicon-32.png"),
+  appUrl("assets/nivaox-stundenzettel-icon-192.png"),
+  appUrl("assets/nivaox-stundenzettel-icon-512.png"),
+  appUrl("assets/nivaox-stundenzettel-apple-touch-icon.png"),
+  appUrl("assets/nivaox-stundenzettel-favicon-32.png"),
 ];
 
 self.addEventListener("install", (event) => {
