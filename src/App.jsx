@@ -25,6 +25,7 @@ import {
   Warning,
   X,
 } from "@phosphor-icons/react";
+import { insertEntryIntoTimeline, uid } from "./timeline.js";
 
 // Keep the legacy key so installed PWAs retain all existing time entries.
 const STORAGE_KEY = "nivao-stundenzettel";
@@ -66,10 +67,6 @@ const TYPES = {
     work: false,
   },
 };
-
-function uid() {
-  return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-}
 
 function localDateKey(timestamp = Date.now()) {
   const date = new Date(timestamp);
@@ -118,42 +115,6 @@ function totalMs(entries, predicate, now) {
   return entries
     .filter(predicate)
     .reduce((sum, entry) => sum + durationMs(entry, now), 0);
-}
-
-function mergeAdjacentEntries(entries) {
-  return [...entries]
-    .sort((a, b) => a.start - b.start)
-    .reduce((merged, entry) => {
-      const previous = merged.at(-1);
-      if (previous && previous.type === entry.type && previous.end === entry.start) {
-        previous.end = entry.end;
-        return merged;
-      }
-      merged.push({ ...entry });
-      return merged;
-    }, []);
-}
-
-function insertEntryIntoTimeline(entries, inserted) {
-  const adjusted = entries.flatMap((entry) => {
-    const entryEnd = entry.end ?? Number.POSITIVE_INFINITY;
-    if (entryEnd <= inserted.start || entry.start >= inserted.end) return [entry];
-
-    const remaining = [];
-    if (entry.start < inserted.start) {
-      remaining.push({ ...entry, end: inserted.start });
-    }
-    if (entryEnd > inserted.end) {
-      remaining.push({
-        ...entry,
-        id: uid(),
-        start: inserted.end,
-        end: entry.end,
-      });
-    }
-    return remaining;
-  });
-  return mergeAdjacentEntries([...adjusted, inserted]);
 }
 
 function formatDuration(ms, withSeconds = false) {
@@ -1376,18 +1337,13 @@ export function App() {
 
   const saveEntry = (updated) => {
     const dayKey = editing.dayKey;
-    setState((current) => ({
-      ...current,
-      days: {
-        ...current.days,
-        [dayKey]: {
-          ...current.days[dayKey],
-          entries: current.days[dayKey].entries
-            .map((entry) => entry.id === updated.id ? updated : entry)
-            .sort((a, b) => a.start - b.start),
-        },
-      },
-    }));
+    const day = state.days[dayKey] ?? { entries: [], closedAt: null };
+    const remainingEntries = day.entries.filter((entry) => entry.id !== updated.id);
+    setTimelinePreview({
+      dateKey: dayKey,
+      inserted: updated,
+      entries: insertEntryIntoTimeline(remainingEntries, updated),
+    });
     setEditing(null);
   };
 
